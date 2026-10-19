@@ -3,8 +3,9 @@
 -- 使用说明：
 --   1. 启动后脚本常驻后台，点悬浮球弹出菜单
 --   2. 先按各功能描述进入对应场景（如长安城、凤凰秘境）
---   3. 必须先开启「初始化」，其余功能依赖它
---   4. 关闭功能 / 退出脚本时会自动还原修改前的数值
+--   3. 执行任意功能前会自动先执行「初始化」
+--   4. 「初始化」开启后不可关闭、不可还原
+--   5. 其余功能关闭时自动还原修改前的数值
 -- ============================================================
 
 local TYPE_MAP = {
@@ -28,6 +29,8 @@ local RANGE_MAP = {
   RANGE_ASHMEM    = gg.REGION_ASHMEM,
   RANGE_VIDEO     = gg.REGION_VIDEO,
 }
+
+local LOCKED = "anti_ban"  -- 锁定功能：开启后禁止关闭和还原
 
 -- 功能定义（按菜单顺序排列）
 local FEATURES = {
@@ -273,19 +276,11 @@ end
 -- ============================================================
 
 local function enableFeature(f)
-  if f.depends_on then
-    local dep = featureByKey(f.depends_on)
-    if not state[f.depends_on] then
-      gg.toast("请先开启「" .. (dep and dep.name or f.depends_on) .. "」")
-      return
-    end
-  end
-
   gg.toast("正在搜索：" .. f.name)
   local addrs, err = findAddresses(f)
   if not addrs then
     gg.alert("【" .. f.name .. "】开启失败\n\n" .. err)
-    return
+    return false
   end
 
   local saved, edits = {}, {}
@@ -311,9 +306,31 @@ local function enableFeature(f)
   else
     gg.toast(f.enable_msg)
   end
+  return true
+end
+
+-- 自动执行初始化（供每个功能开启前调用）
+local function autoInit()
+  if state[LOCKED] then return true end
+  local init = featureByKey(LOCKED)
+  gg.toast("自动执行初始化...")
+  return enableFeature(init)
+end
+
+-- 开启任意功能：先自动初始化，再执行该功能
+local function openFeature(f)
+  if not autoInit() then
+    gg.alert("初始化失败，无法开启【" .. f.name .. "】")
+    return
+  end
+  enableFeature(f)
 end
 
 local function disableFeature(f)
+  if f.id == LOCKED then
+    gg.toast("初始化开启后不可关闭")
+    return
+  end
   if savedValues[f.id] then
     gg.setValues(savedValues[f.id])
     savedValues[f.id] = nil
@@ -323,14 +340,14 @@ local function disableFeature(f)
 end
 
 local function disableAll()
-  -- 按开启顺序的逆序还原，避免依赖关系问题
+  -- 按开启顺序的逆序还原；初始化为锁定功能，永不还原
   for i = #FEATURES, 1, -1 do
     local f = FEATURES[i]
-    if state[f.id] then
+    if state[f.id] and f.id ~= LOCKED then
       disableFeature(f)
     end
   end
-  gg.toast("已还原全部修改")
+  gg.toast("已还原全部修改（初始化除外）")
 end
 
 -- ============================================================
@@ -341,14 +358,19 @@ end
 local function showMenu()
   local items = {}
   for _, f in ipairs(FEATURES) do
-    items[#items + 1] = (state[f.id] and "[开] " or "[关] ")
-      .. f.name .. "（" .. f.description .. "）"
+    if f.id == LOCKED then
+      items[#items + 1] = (state[f.id] and "[开] " or "[关] ")
+        .. f.name .. "（锁定，不可关闭）"
+    else
+      items[#items + 1] = (state[f.id] and "[开] " or "[关] ")
+        .. f.name .. "（" .. f.description .. "）"
+    end
   end
-  items[#items + 1] = "全部还原"
+  items[#items + 1] = "全部还原（初始化除外）"
   items[#items + 1] = "退出脚本"
 
   local sel = gg.choice(items, nil, "功能菜单（点击切换开关）")
-  if not sel then return true end  -- 用户取消，继续轮询
+  if not sel then return true end
 
   if sel == #FEATURES + 1 then
     disableAll()
@@ -359,9 +381,9 @@ local function showMenu()
 
   local f = FEATURES[sel]
   if state[f.id] then
-    disableFeature(f)
+    disableFeature(f)  -- 初始化在此被拦截，不会关闭
   else
-    enableFeature(f)
+    openFeature(f)
   end
   return true
 end
@@ -384,8 +406,8 @@ local function main()
     gg.sleep(100)
   end
 
-  disableAll()
-  gg.toast("脚本已退出，所有修改已还原")
+  disableAll()  -- 跳过初始化，其余还原
+  gg.toast("脚本已退出")
 end
 
 main()
