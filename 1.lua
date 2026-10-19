@@ -3,7 +3,7 @@
 -- 使用说明：
 --   1. 启动后脚本常驻后台，点悬浮球弹出菜单
 --   2. 先按各功能描述进入对应场景（如长安城、凤凰秘境）
---   3. 执行任意功能前会自动先执行「初始化」
+--   3. 执行任意功能前先校验初始化：未开启或校验失败自动重新初始化
 --   4. 「初始化」开启后不可关闭、不可还原
 --   5. 其余功能关闭时自动还原修改前的数值
 -- ============================================================
@@ -198,6 +198,7 @@ local FEATURES = {
 
 local state = {}        -- 功能开启状态
 local savedValues = {}  -- 修改前的原始值（用于还原）
+local initCheck = nil   -- 初始化写入的地址与期望值（供校验）
 local running = true    -- 主循环控制
 
 local function featureByKey(key)
@@ -300,6 +301,11 @@ local function enableFeature(f)
   savedValues[f.id] = saved
   gg.setValues(edits)
 
+  -- 初始化写入后记录期望值，供后续校验
+  if f.id == LOCKED then
+    initCheck = edits
+  end
+
   state[f.id] = true
   if #addrs > 1 then
     gg.toast(f.enable_msg .. "\n（匹配到 " .. #addrs .. " 个结果，已全部修改）")
@@ -309,18 +315,35 @@ local function enableFeature(f)
   return true
 end
 
--- 自动执行初始化（供每个功能开启前调用）
-local function autoInit()
-  if state[LOCKED] then return true end
+-- 执行初始化（搜索 + 写入）
+local function runInit()
   local init = featureByKey(LOCKED)
-  gg.toast("自动执行初始化...")
+  gg.toast("正在执行初始化...")
   return enableFeature(init)
 end
 
--- 开启任意功能：先自动初始化，再执行该功能
+-- 校验初始化：未开启则自动执行；已开启则回读内存逐项比对，
+-- 任一值不匹配视为失效，自动重新初始化
+local function checkInit()
+  if not state[LOCKED] or not initCheck then
+    return runInit()
+  end
+
+  local now = gg.getValues(initCheck)
+  for i, e in ipairs(initCheck) do
+    local isFloat = (e.flags == gg.TYPE_DOUBLE or e.flags == gg.TYPE_FLOAT)
+    if not sameValue(now[i].value, e.value, isFloat) then
+      gg.toast("初始化校验失败，重新初始化")
+      return runInit()
+    end
+  end
+  return true
+end
+
+-- 开启任意功能：先校验初始化，通过后再执行该功能
 local function openFeature(f)
-  if not autoInit() then
-    gg.alert("初始化失败，无法开启【" .. f.name .. "】")
+  if not checkInit() then
+    gg.alert("初始化校验/执行失败，无法开启【" .. f.name .. "】")
     return
   end
   enableFeature(f)
